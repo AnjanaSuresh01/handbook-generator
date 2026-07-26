@@ -45,15 +45,18 @@ class StubLLM:
 
     def complete_json(self, prompt, *, system=None, **kwargs):
         self.calls += 1
-        return [
-            {
-                "title": f"Section {i + 1}",
-                "brief": f"Covers aspect {i + 1} of retrieval-augmented generation.",
-                "key_points": ["retriever", "embeddings", "grounding"],
-                "words": 400,
-            }
-            for i in range(self.sections)
-        ]
+        return {
+            "title": "A Practical Guide to Retrieval-Augmented Generation",
+            "sections": [
+                {
+                    "title": f"Section {i + 1}",
+                    "brief": f"Covers aspect {i + 1} of retrieval-augmented generation.",
+                    "key_points": ["retriever", "embeddings", "grounding"],
+                    "words": 400,
+                }
+                for i in range(self.sections)
+            ],
+        }
 
 
 class TestIngest:
@@ -83,10 +86,8 @@ class TestLocalStore:
     def _store(self):
         store = LocalStore()
         store.index(
-        chunk_document(
-            Document("rag.pdf", SOURCE, 1, "test"), chunk_words=60, overlap_words=15
+            chunk_document(Document("rag.pdf", SOURCE, 1, "test"), chunk_words=60, overlap_words=15)
         )
-    )
         return store
 
     def test_retrieval_returns_relevant_text(self):
@@ -151,10 +152,8 @@ class TestWriteAndAssemble:
         llm = StubLLM(sections=3)
         store = LocalStore()
         store.index(
-        chunk_document(
-            Document("rag.pdf", SOURCE, 1, "test"), chunk_words=60, overlap_words=15
+            chunk_document(Document("rag.pdf", SOURCE, 1, "test"), chunk_words=60, overlap_words=15)
         )
-    )
         outline = plan_outline(llm, "RAG", SOURCE, GenerationConfig(target_words=1200))
         return write_handbook(
             llm,
@@ -184,7 +183,7 @@ class TestWriteAndAssemble:
     def test_assembled_document_has_structure(self):
         result = self._run()
         document = assemble(result, [Document("rag.pdf", SOURCE, 10, "test")])
-        assert document.startswith("# RAG")
+        assert document.startswith("# A Practical Guide")
         assert "## Table of Contents" in document
         assert "## Sources" in document
         assert "## Generation Quality Report" in document
@@ -195,10 +194,8 @@ class TestWriteAndAssemble:
         llm = StubLLM(sections=2)
         store = LocalStore()
         store.index(
-        chunk_document(
-            Document("rag.pdf", SOURCE, 1, "test"), chunk_words=60, overlap_words=15
+            chunk_document(Document("rag.pdf", SOURCE, 1, "test"), chunk_words=60, overlap_words=15)
         )
-    )
         outline = plan_outline(llm, "RAG", SOURCE, GenerationConfig(target_words=800))
         write_handbook(
             llm,
@@ -238,7 +235,7 @@ class TestSession:
 
     def test_generate_returns_markdown_and_result(self):
         content, result = self._session().generate_handbook("RAG")
-        assert content.startswith("# RAG")
+        assert content.startswith("# A Practical Guide")
         assert result.total_words > 0
 
     def test_chat_records_history(self):
@@ -292,9 +289,7 @@ def test_quality_report_is_json_serialisable():
     llm = StubLLM(sections=2)
     store = LocalStore()
     store.index(
-        chunk_document(
-            Document("rag.pdf", SOURCE, 1, "test"), chunk_words=60, overlap_words=15
-        )
+        chunk_document(Document("rag.pdf", SOURCE, 1, "test"), chunk_words=60, overlap_words=15)
     )
     outline = plan_outline(llm, "RAG", SOURCE, GenerationConfig(target_words=800))
     result = write_handbook(
@@ -307,3 +302,52 @@ def test_quality_report_is_json_serialisable():
     )
     json.dumps(result.quality_summary())
     json.dumps([s.report.as_dict() for s in result.sections])
+
+
+class TestSectionOrdering:
+    def _titles(self, titles):
+        from handbook.outline import Section, order_sections
+
+        sections = [Section(title=t, brief="") for t in titles]
+        return [s.title for s in order_sections(sections)]
+
+    def test_conclusion_moves_to_the_end(self):
+        assert self._titles(["Intro", "Conclusion and Summary", "Case Studies"]) == [
+            "Intro",
+            "Case Studies",
+            "Conclusion and Summary",
+        ]
+
+    def test_indices_are_renumbered(self):
+        from handbook.outline import Section, order_sections
+
+        sections = order_sections(
+            [Section(title=t, brief="") for t in ["Summary", "Intro", "Details"]]
+        )
+        assert [s.index for s in sections] == [0, 1, 2]
+        assert sections[-1].title == "Summary"
+
+    def test_ordinary_titles_keep_their_order(self):
+        titles = ["Intro", "Tools", "Governance"]
+        assert self._titles(titles) == titles
+
+    def test_all_closing_titles_are_left_alone(self):
+        titles = ["Summary", "Conclusion"]
+        assert self._titles(titles) == titles
+
+    def test_german_closing_title_is_detected(self):
+        assert self._titles(["Zusammenfassung", "Werkzeuge"])[-1] == "Zusammenfassung"
+
+
+class TestOutlineTitle:
+    def test_planner_title_is_used(self):
+        outline = plan_outline(StubLLM(2), "RAG", SOURCE, GenerationConfig(target_words=800))
+        assert outline.display_title == "A Practical Guide to Retrieval-Augmented Generation"
+
+    def test_falls_back_to_topic_without_a_title(self):
+        class NoTitle(StubLLM):
+            def complete_json(self, prompt, *, system=None, **kwargs):
+                return [{"title": "S1", "brief": "b", "key_points": [], "words": 400}]
+
+        outline = plan_outline(NoTitle(), "RAG", SOURCE, GenerationConfig(target_words=400))
+        assert outline.display_title == "RAG"

@@ -179,7 +179,7 @@ def _write_one(
 
     for attempt in range(1, verification.max_retries + 2):
         prompt = _PROMPT.format(
-            topic=outline.topic,
+            topic=outline.display_title,
             number=section.index + 1,
             total=total,
             title=section.title,

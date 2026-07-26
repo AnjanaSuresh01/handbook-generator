@@ -10,6 +10,7 @@ budget. This module produces that plan.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 
 from .config import GenerationConfig
@@ -48,8 +49,20 @@ Rules:
 - Sections must not overlap in content. Each "brief" should make the boundary
   with the previous section explicit.
 - Order sections so the handbook reads from foundational to advanced.
+- Any conclusion or summary section must come last.
 
-Return only the JSON array."""
+Return a JSON object with exactly two keys:
+  "title"    - a specific, descriptive title for the handbook, drawn from what
+               the sources actually cover
+  "sections" - the array of sections
+
+Return only the JSON object."""
+
+# Titles that belong at the end of a document, whatever the planner decided.
+_CLOSING_RE = re.compile(
+    r"\b(conclusion|summary|closing|final thoughts|wrap[- ]up|outlook|fazit|zusammenfassung)\b",
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -78,13 +91,24 @@ class Outline:
 
     topic: str
     sections: list[Section]
+    title: str = ""
 
     @property
     def total_words(self) -> int:
         return sum(section.words for section in self.sections)
 
+    @property
+    def display_title(self) -> str:
+        """Title for the finished document.
+
+        Falls back to the topic, which is itself a placeholder when the user
+        asked for "a handbook" without naming a subject.
+        """
+        return self.title or self.topic
+
     def as_dict(self) -> dict:
         return {
+            "title": self.display_title,
             "topic": self.topic,
             "total_words": self.total_words,
             "sections": [s.as_dict() for s in self.sections],
@@ -107,22 +131,38 @@ def plan_outline(
     )
     payload = client.complete_json(prompt, system=_SYSTEM, temperature=0.4)
 
+    title = ""
     if isinstance(payload, dict):
-        # Some models wrap the array in {"sections": [...]}.
+        title = str(payload.get("title") or "").strip()
+        # Models still return a bare array often enough to keep handling it.
         payload = payload.get("sections") or payload.get("outline") or []
     if not isinstance(payload, list) or not payload:
         raise LLMError("Planner returned no sections")
 
     sections = [
-        _coerce_section(item, i)
-        for i, item in enumerate(payload)
-        if isinstance(item, dict)
+        _coerce_section(item, i) for i, item in enumerate(payload) if isinstance(item, dict)
     ]
     if not sections:
         raise LLMError("Planner returned no usable sections")
 
-    sections = rebalance(sections, config.target_words)
-    return Outline(topic=topic, sections=sections)
+    sections = rebalance(order_sections(sections), config.target_words)
+    return Outline(topic=topic, sections=sections, title=title)
+
+
+def order_sections(sections: list[Section]) -> list[Section]:
+    """Move any conclusion or summary section to the end.
+
+    Planners regularly emit a conclusion in the middle and then keep going,
+    which reads as a mistake no matter how good the prose is. Enforcing this
+    deterministically is more reliable than asking the model twice.
+    """
+    body = [s for s in sections if not _CLOSING_RE.search(s.title)]
+    closing = [s for s in sections if _CLOSING_RE.search(s.title)]
+    # All-closing titles would otherwise empty the handbook.
+    ordered = (body + closing) if body else sections
+    for i, section in enumerate(ordered):
+        section.index = i
+    return ordered
 
 
 def _coerce_section(item: dict, index: int) -> Section:

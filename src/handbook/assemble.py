@@ -83,7 +83,7 @@ def assemble(
     include_quality_report: bool = True,
 ) -> str:
     """Produce the final Markdown handbook."""
-    title = result.outline.topic.strip().rstrip(".")
+    title = result.outline.display_title.strip().rstrip(".")
     parts = [
         f"# {title}",
         "",
