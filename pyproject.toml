@@ -40,4 +40,7 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+# "." puts app.py on the path. Without it, bare `pytest` (as CI runs it)
+# cannot import app, while `python -m pytest` can -- an easy way to have a
+# suite that passes locally and fails in CI.
+pythonpath = ["src", "."]
