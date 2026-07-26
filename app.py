@@ -169,4 +169,9 @@ def build_ui() -> gr.Blocks:
 
 
 if __name__ == "__main__":
-    build_ui().launch()
+    # Gradio logs its own version-check requests at INFO, which sit right next
+    # to the real URL and are easy to click by mistake. Quieten them and open
+    # the browser directly.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    print("\n  Opening the app at http://127.0.0.1:7860\n")
+    build_ui().launch(inbrowser=True)
