@@ -1,0 +1,28 @@
+# Secrets
+.env
+
+# Generated artefacts
+storage/
+handbooks/
+*.md.bak
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# Gradio
+.gradio/
+flagged/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

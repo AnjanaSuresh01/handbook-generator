@@ -1,0 +1,43 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "handbook-generator"
+version = "0.1.0"
+description = "Generate 20,000-word handbooks from uploaded PDFs through a chat interface"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Anjana Suresh", email = "anjanas222001@gmail.com" }]
+keywords = ["llm", "rag", "long-form-generation", "pdf", "gradio", "evaluation"]
+
+dependencies = [
+    "gradio>=4.44",
+    "pypdf>=5.0",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+# Knowledge-graph retrieval instead of the built-in BM25 index.
+graph = ["lightrag-hku>=1.0", "supabase>=2.0"]
+# Richer PDF parsing: OCR only when a page needs it, tables preserved.
+parse = ["liteparse>=0.1"]
+dev = ["pytest>=8.0", "ruff>=0.6"]
+
+[project.scripts]
+handbook = "handbook.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/handbook"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
