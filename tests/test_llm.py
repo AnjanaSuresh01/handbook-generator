@@ -43,3 +43,59 @@ class TestErrorMessages:
         message = self._explain(500, "internal boom")
         assert "500" in message
         assert "internal boom" in message
+
+
+class TestRateLimitHandling:
+    def test_429_is_not_in_the_generic_retry_set(self):
+        """429 must take the wait-and-retry path, not the 3-strikes path."""
+        from handbook.llm import _RATE_LIMITED, _RETRYABLE_STATUS
+
+        assert _RATE_LIMITED == 429
+        assert 429 not in _RETRYABLE_STATUS
+
+    def test_retry_after_header_is_honoured(self):
+        import urllib.error
+
+        from handbook.llm import _retry_after
+
+        exc = urllib.error.HTTPError("u", 429, "x", {"Retry-After": "17"}, None)
+        assert _retry_after(exc) == 17.0
+
+    def test_retry_after_is_capped(self):
+        import urllib.error
+
+        from handbook.llm import _retry_after
+
+        exc = urllib.error.HTTPError("u", 429, "x", {"Retry-After": "99999"}, None)
+        assert _retry_after(exc) == 300.0
+
+    def test_missing_or_malformed_retry_after_returns_none(self):
+        import urllib.error
+
+        from handbook.llm import _retry_after
+
+        assert _retry_after(urllib.error.HTTPError("u", 429, "x", {}, None)) is None
+        assert (
+            _retry_after(urllib.error.HTTPError("u", 429, "x", {"Retry-After": "soon"}, None))
+            is None
+        )
+
+    def test_throttle_waits_between_calls(self):
+        import time
+
+        client = LLMClient(LLMConfig(), min_interval=0.25)
+        client._last_call_at = time.monotonic()
+        started = time.monotonic()
+        client._throttle()
+        assert time.monotonic() - started >= 0.2
+
+    def test_throttle_is_skipped_when_disabled(self):
+        import time
+
+        client = LLMClient(LLMConfig(), min_interval=0)
+        started = time.monotonic()
+        client._throttle()
+        assert time.monotonic() - started < 0.05
+
+    def test_429_message_suggests_a_smaller_target(self):
+        assert "HANDBOOK_TARGET_WORDS" in _explain(429, "limit", LLMConfig())

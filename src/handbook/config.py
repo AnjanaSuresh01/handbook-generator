@@ -51,6 +51,9 @@ class LLMConfig:
     model: str = field(default_factory=lambda: _env("LLM_MODEL", "llama-3.3-70b-versatile"))
     api_key: str = field(default_factory=lambda: _env("LLM_API_KEY", ""))
     timeout: float = field(default_factory=lambda: _env_float("LLM_TIMEOUT", 180.0))
+    #: Minimum seconds between calls. Free tiers cap requests per minute, and
+    #: pacing costs less total time than repeatedly tripping the limit.
+    min_interval: float = field(default_factory=lambda: _env_float("LLM_MIN_INTERVAL", 2.0))
 
     @property
     def configured(self) -> bool:

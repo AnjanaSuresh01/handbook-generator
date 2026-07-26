@@ -20,7 +20,8 @@ from .config import LLMConfig
 
 log = logging.getLogger(__name__)
 
-_RETRYABLE_STATUS = {408, 429, 500, 502, 503, 504}
+_RETRYABLE_STATUS = {408, 500, 502, 503, 504}
+_RATE_LIMITED = 429
 
 # Several providers (Groq among them) sit behind Cloudflare, which rejects the
 # default "Python-urllib/x.y" User-Agent as bot traffic with 403 error 1010
@@ -52,12 +53,29 @@ class Usage:
 
 
 class LLMClient:
-    """Minimal chat-completions client with retry and usage tracking."""
+    """Minimal chat-completions client with retry, throttling and usage tracking.
 
-    def __init__(self, config: LLMConfig, *, max_retries: int = 3) -> None:
+    Rate limits are handled separately from transient errors. A 429 is not a
+    failure to retry a few times and give up on -- it is an instruction to wait,
+    usually with a Retry-After header saying exactly how long. Free tiers reset
+    per minute, so a handbook run has to be prepared to sit still for a while
+    rather than burn its retry budget in eight seconds.
+    """
+
+    def __init__(
+        self,
+        config: LLMConfig,
+        *,
+        max_retries: int = 3,
+        max_rate_limit_waits: int = 12,
+        min_interval: float | None = None,
+    ) -> None:
         self.config = config
         self.max_retries = max_retries
+        self.max_rate_limit_waits = max_rate_limit_waits
+        self.min_interval = config.min_interval if min_interval is None else min_interval
         self.usage = Usage()
+        self._last_call_at = 0.0
 
     def complete(
         self,
@@ -107,30 +125,82 @@ class LLMClient:
             "User-Agent": _USER_AGENT,
         }
 
+    def _throttle(self) -> None:
+        """Keep a minimum gap between calls to stay under requests-per-minute caps."""
+        if self.min_interval <= 0:
+            return
+        elapsed = time.monotonic() - self._last_call_at
+        if elapsed < self.min_interval:
+            time.sleep(self.min_interval - elapsed)
+
     def _post(self, path: str, body: dict) -> dict:
         url = self.config.base_url.rstrip("/") + path
         data = json.dumps(body).encode("utf-8")
         headers = self.build_headers()
 
         last_error: Exception | None = None
-        for attempt in range(self.max_retries):
+        attempts = 0
+        rate_limit_waits = 0
+
+        while True:
+            self._throttle()
             request = urllib.request.Request(url, data=data, headers=headers, method="POST")
             try:
                 with urllib.request.urlopen(request, timeout=self.config.timeout) as response:
+                    self._last_call_at = time.monotonic()
                     return json.loads(response.read().decode("utf-8"))
+
             except urllib.error.HTTPError as exc:
+                self._last_call_at = time.monotonic()
                 last_error = exc
+
+                if exc.code == _RATE_LIMITED:
+                    rate_limit_waits += 1
+                    if rate_limit_waits > self.max_rate_limit_waits:
+                        detail = exc.read().decode("utf-8", "replace")[:500]
+                        raise LLMError(_explain(exc.code, detail, self.config)) from exc
+                    delay = _retry_after(exc) or min(60.0, 10.0 * rate_limit_waits)
+                    log.warning(
+                        "Rate limited by the provider; waiting %.0fs (pause %d of %d)",
+                        delay,
+                        rate_limit_waits,
+                        self.max_rate_limit_waits,
+                    )
+                    time.sleep(delay)
+                    continue
+
                 if exc.code not in _RETRYABLE_STATUS:
                     detail = exc.read().decode("utf-8", "replace")[:500]
                     raise LLMError(_explain(exc.code, detail, self.config)) from exc
+
             except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+                self._last_call_at = time.monotonic()
                 last_error = exc
 
-            backoff = 2**attempt
-            log.warning("LLM call failed (attempt %d), retrying in %ss", attempt + 1, backoff)
+            attempts += 1
+            if attempts >= self.max_retries:
+                break
+            backoff = 2**attempts
+            log.warning("LLM call failed (attempt %d), retrying in %ss", attempts, backoff)
             time.sleep(backoff)
 
         raise LLMError(f"LLM call failed after {self.max_retries} attempts: {last_error}")
+
+
+def _retry_after(exc: urllib.error.HTTPError) -> float | None:
+    """Seconds to wait, from the provider's Retry-After header.
+
+    Providers say exactly how long to wait; guessing when we have been told is
+    both slower and ruder. Values are capped so a malformed header cannot hang
+    a run for hours.
+    """
+    raw = (exc.headers.get("Retry-After") or "").strip() if exc.headers else ""
+    if not raw:
+        return None
+    try:
+        return max(1.0, min(float(raw), 300.0))
+    except ValueError:
+        return None
 
 
 def _explain(status: int, detail: str, config: LLMConfig) -> str:
@@ -147,7 +217,12 @@ def _explain(status: int, detail: str, config: LLMConfig) -> str:
             f"model '{config.model}' still exists with this provider."
         ),
         413: "The request was too large. Lower the retrieval context size.",
-        429: "Rate limit or quota exhausted. Wait a minute and try again.",
+        429: (
+            "Rate limit or daily quota exhausted, and waiting did not clear it. "
+            "On a free tier, generate a shorter handbook first "
+            "(set HANDBOOK_TARGET_WORDS=3000 in .env), raise LLM_MIN_INTERVAL to "
+            "slow the request rate, or continue tomorrow when the daily quota resets."
+        ),
     }
     hint = hints.get(status, "")
     return f"Provider returned {status}: {detail}" + (f"\n\n{hint}" if hint else "")
