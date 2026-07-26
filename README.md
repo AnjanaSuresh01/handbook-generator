@@ -1,1 +1,1 @@
-# lunartech-handbook-generator
+# handbook-generator
