@@ -22,6 +22,11 @@ log = logging.getLogger(__name__)
 
 _RETRYABLE_STATUS = {408, 429, 500, 502, 503, 504}
 
+# Several providers (Groq among them) sit behind Cloudflare, which rejects the
+# default "Python-urllib/x.y" User-Agent as bot traffic with 403 error 1010
+# before the request ever reaches the API. Any explicit value avoids this.
+_USER_AGENT = "handbook-generator/0.1 (+https://github.com/AnjanaSuresh01/handbook-generator)"
+
 
 class LLMError(RuntimeError):
     """Raised when the provider cannot be reached or returns an unusable reply."""
@@ -95,13 +100,17 @@ class LLMClient:
         raw = self.complete(prompt, system=system, **kwargs)
         return parse_json_block(raw)
 
+    def build_headers(self) -> dict[str, str]:
+        return {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.config.api_key}",
+            "User-Agent": _USER_AGENT,
+        }
+
     def _post(self, path: str, body: dict) -> dict:
         url = self.config.base_url.rstrip("/") + path
         data = json.dumps(body).encode("utf-8")
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.config.api_key}",
-        }
+        headers = self.build_headers()
 
         last_error: Exception | None = None
         for attempt in range(self.max_retries):
@@ -113,7 +122,7 @@ class LLMClient:
                 last_error = exc
                 if exc.code not in _RETRYABLE_STATUS:
                     detail = exc.read().decode("utf-8", "replace")[:500]
-                    raise LLMError(f"Provider returned {exc.code}: {detail}") from exc
+                    raise LLMError(_explain(exc.code, detail, self.config)) from exc
             except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
                 last_error = exc
 
@@ -122,6 +131,26 @@ class LLMClient:
             time.sleep(backoff)
 
         raise LLMError(f"LLM call failed after {self.max_retries} attempts: {last_error}")
+
+
+def _explain(status: int, detail: str, config: LLMConfig) -> str:
+    """Turn a raw HTTP failure into something a user can act on."""
+    hints = {
+        401: "The API key was rejected. Check LLM_API_KEY in your .env file.",
+        403: (
+            "Access refused. If this mentions error code 1010 the provider's "
+            "bot protection blocked the request; if it mentions the model, your "
+            f"key may not have access to '{config.model}'."
+        ),
+        404: (
+            f"Not found. Check LLM_BASE_URL ({config.base_url}) and that the "
+            f"model '{config.model}' still exists with this provider."
+        ),
+        413: "The request was too large. Lower the retrieval context size.",
+        429: "Rate limit or quota exhausted. Wait a minute and try again.",
+    }
+    hint = hints.get(status, "")
+    return f"Provider returned {status}: {detail}" + (f"\n\n{hint}" if hint else "")
 
 
 def parse_json_block(text: str) -> dict | list:
