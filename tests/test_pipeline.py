@@ -247,6 +247,21 @@ class TestSession:
         assert len(session.history) == 1
 
 
+class TestUI:
+    def test_ui_builds(self):
+        """Construct the real Gradio layout.
+
+        Importing app.py is not enough: components are only instantiated inside
+        build_ui(), so an incompatible Gradio release fails here rather than on
+        the user's screen at launch.
+        """
+        import gradio as gr
+
+        from app import build_ui
+
+        assert isinstance(build_ui(), gr.Blocks)
+
+
 class TestHandbookIntentDetection:
     @pytest.mark.parametrize(
         "message,expected",

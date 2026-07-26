@@ -70,7 +70,9 @@ def build_ui() -> gr.Blocks:
                 download = gr.File(label="Generated handbook", visible=False, interactive=False)
 
             with gr.Column(scale=2):
-                chatbot = gr.Chatbot(label="Chat", type="messages", height=520)
+                # Gradio 6 dropped the `type` argument; {"role", "content"}
+                # message dicts are the only supported format now.
+                chatbot = gr.Chatbot(label="Chat", height=520)
                 message = gr.Textbox(
                     placeholder=(
                         "Ask a question, or: generate a handbook on "

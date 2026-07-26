@@ -13,7 +13,9 @@ authors = [{ name = "Anjana Suresh", email = "anjanas222001@gmail.com" }]
 keywords = ["llm", "rag", "long-form-generation", "pdf", "gradio", "evaluation"]
 
 dependencies = [
-    "gradio>=4.44",
+    # Gradio 6 removed Chatbot(type=...) and made message dicts the default;
+    # the UI is written against that API.
+    "gradio>=6.0",
     "pypdf>=5.0",
     "python-dotenv>=1.0",
 ]
